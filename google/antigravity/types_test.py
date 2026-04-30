@@ -568,11 +568,9 @@ class BuiltinToolsTest(unittest.TestCase):
     """Verifies each enum member has the expected string value."""
     self.assertEqual(types.BuiltinTools.LIST_DIR, "list_directory")
     self.assertEqual(types.BuiltinTools.SEARCH_DIR, "search_directory")
-    self.assertEqual(types.BuiltinTools.DELETE_DIR, "delete_directory")
     self.assertEqual(types.BuiltinTools.VIEW_FILE, "view_file")
     self.assertEqual(types.BuiltinTools.CREATE_FILE, "create_file")
     self.assertEqual(types.BuiltinTools.EDIT_FILE, "edit_file")
-    self.assertEqual(types.BuiltinTools.DELETE_FILE, "delete_file")
     self.assertEqual(types.BuiltinTools.RUN_COMMAND, "run_command")
     self.assertEqual(types.BuiltinTools.ASK_QUESTION, "ask_question")
 
@@ -585,10 +583,8 @@ class BuiltinToolsTest(unittest.TestCase):
     """
     read_only = set(types.BuiltinTools.read_only())
     write_tools = {
-        types.BuiltinTools.DELETE_DIR,
         types.BuiltinTools.CREATE_FILE,
         types.BuiltinTools.EDIT_FILE,
-        types.BuiltinTools.DELETE_FILE,
         types.BuiltinTools.RUN_COMMAND,
         types.BuiltinTools.ASK_QUESTION,
         types.BuiltinTools.START_SUBAGENT,
@@ -613,8 +609,6 @@ class BuiltinToolsTest(unittest.TestCase):
     """
     nondestructive = set(types.BuiltinTools.nondestructive())
     destructive_tools = {
-        types.BuiltinTools.DELETE_DIR,
-        types.BuiltinTools.DELETE_FILE,
         types.BuiltinTools.RUN_COMMAND,
     }
     self.assertEqual(
@@ -653,11 +647,10 @@ class CapabilitiesConfigTest(unittest.TestCase):
     config = types.CapabilitiesConfig(
         disabled_tools=[
             types.BuiltinTools.RUN_COMMAND,
-            types.BuiltinTools.DELETE_FILE,
         ]
     )
     self.assertIsNone(config.enabled_tools)
-    self.assertEqual(len(config.disabled_tools), 2)
+    self.assertEqual(len(config.disabled_tools), 1)
 
   def test_mutually_exclusive_raises(self):
     """Verifies that setting both enabled_tools and disabled_tools raises."""

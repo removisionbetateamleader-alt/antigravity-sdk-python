@@ -120,11 +120,9 @@ class BuiltinTools(str, enum.Enum):
     LIST_DIR: List directory contents.
     SEARCH_DIR: Search within directories (grep).
     FIND_FILE: Find files by name within a directory.
-    DELETE_DIR: Delete a directory.
     VIEW_FILE: View file contents.
     CREATE_FILE: Create a new file.
     EDIT_FILE: Edit an existing file.
-    DELETE_FILE: Delete a file.
     RUN_COMMAND: Execute a shell command.
     ASK_QUESTION: Ask the user a clarifying question.
     START_SUBAGENT: Invoke a subagent.
@@ -133,11 +131,9 @@ class BuiltinTools(str, enum.Enum):
   LIST_DIR = "list_directory"
   SEARCH_DIR = "search_directory"
   FIND_FILE = "find_file"
-  DELETE_DIR = "delete_directory"
   VIEW_FILE = "view_file"
   CREATE_FILE = "create_file"
   EDIT_FILE = "edit_file"
-  DELETE_FILE = "delete_file"
   RUN_COMMAND = "run_command"
   ASK_QUESTION = "ask_question"
   START_SUBAGENT = "start_subagent"

@@ -91,8 +91,6 @@ _STATUS_MAP = {
 # Kept as an explicit map because enum values and proto field names may diverge.
 _BUILTIN_TOOL_PROTO_FIELDS: dict[types.BuiltinTools, str] = {
     types.BuiltinTools.CREATE_FILE: "create_file",
-    types.BuiltinTools.DELETE_DIR: "delete_directory",
-    types.BuiltinTools.DELETE_FILE: "delete_file",
     types.BuiltinTools.EDIT_FILE: "edit_file",
     types.BuiltinTools.FIND_FILE: "find_file",
     types.BuiltinTools.LIST_DIR: "list_directory",
@@ -106,13 +104,6 @@ _BUILTIN_TOOL_PROTO_FIELDS: dict[types.BuiltinTools, str] = {
 # known BuiltinTools proto field. This represents a pre-request notification
 # from the Connection for a host-side tool whose specific call will follow.
 DEFAULT_HOST_TOOL_NAME = "pre_request_host_tool_request"
-
-# Tools that currently have Connection-level proto toggles.
-_PROTO_SUPPORTED_TOOLS = {
-    types.BuiltinTools.RUN_COMMAND,
-    types.BuiltinTools.ASK_QUESTION,
-    types.BuiltinTools.FIND_FILE,
-}
 
 
 class LocalConnectionStep(types.Step):
@@ -961,22 +952,12 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
 
     # Determine which BuiltinTools are active.
     all_tools = set(types.BuiltinTools)
-    unsupported = set()
     if cfg.enabled_tools is not None:
       active_tools = set(cfg.enabled_tools)
-      unsupported = set(cfg.enabled_tools) - _PROTO_SUPPORTED_TOOLS
     elif cfg.disabled_tools is not None:
       active_tools = all_tools - set(cfg.disabled_tools)
-      unsupported = set(cfg.disabled_tools) - _PROTO_SUPPORTED_TOOLS
     else:
       active_tools = all_tools
-
-    if unsupported:
-      logging.warning(
-          "The following tools do not yet have LocalConnection-level toggles"
-          " and will be ignored: %s",
-          unsupported,
-      )
 
     harness_side_tools = localharness_pb2.HarnessSideTools(
         subagents=localharness_pb2.SubagentsConfig(
@@ -990,6 +971,21 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         ),
         run_command=localharness_pb2.RunCommandToolConfig(
             enabled=types.BuiltinTools.RUN_COMMAND in active_tools
+        ),
+        file_edit=localharness_pb2.FileEditToolConfig(
+            enabled=types.BuiltinTools.EDIT_FILE in active_tools
+        ),
+        view_file=localharness_pb2.ViewFileToolConfig(
+            enabled=types.BuiltinTools.VIEW_FILE in active_tools
+        ),
+        write_to_file=localharness_pb2.WriteToFileToolConfig(
+            enabled=types.BuiltinTools.CREATE_FILE in active_tools
+        ),
+        grep_search=localharness_pb2.GrepSearchToolConfig(
+            enabled=types.BuiltinTools.SEARCH_DIR in active_tools
+        ),
+        list_dir=localharness_pb2.ListDirToolConfig(
+            enabled=types.BuiltinTools.LIST_DIR in active_tools
         ),
     )
 

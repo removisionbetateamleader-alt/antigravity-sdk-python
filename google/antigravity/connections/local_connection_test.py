@@ -907,10 +907,11 @@ class LocalConnectionStrategyConfigTest(unittest.TestCase):
     self.assertEqual(list(config.skills_paths), ["/skills/a", "/skills/b"])
 
   def test_capabilities_config_disabled_tools(self):
-    """Verifies that disabling RUN_COMMAND and ASK_QUESTION produces the correct proto.
+    """Verifies that disabling tools produces the correct proto.
 
-    Why: These are the two tools with harness-level proto toggles today.
-    How: Disable both and assert each sub-proto's enabled field.
+    Why: Each BuiltinTool with a proto toggle should map to its config field.
+    How: Disable RUN_COMMAND and ASK_QUESTION and assert each sub-proto's
+    enabled field, plus check that other tools remain enabled.
     """
     strategy = self._make_strategy(
         capabilities_config=types.CapabilitiesConfig(
@@ -925,16 +926,20 @@ class LocalConnectionStrategyConfigTest(unittest.TestCase):
     self.assertFalse(config.harness_side_tools.user_questions.enabled)
     # Subagents are not in BuiltinTools; should still be enabled by default.
     self.assertTrue(config.harness_side_tools.subagents.enabled)
-    # find was not disabled, so it should still be enabled.
+    # Tools that were not disabled should still be enabled.
     self.assertTrue(config.harness_side_tools.find.enabled)
+    self.assertTrue(config.harness_side_tools.file_edit.enabled)
+    self.assertTrue(config.harness_side_tools.view_file.enabled)
+    self.assertTrue(config.harness_side_tools.write_to_file.enabled)
+    self.assertTrue(config.harness_side_tools.grep_search.enabled)
+    self.assertTrue(config.harness_side_tools.list_dir.enabled)
 
   def test_capabilities_config_enabled_tools(self):
     """Verifies that enabled_tools allowlist excludes non-listed tools.
 
     Why: When an explicit allowlist is provided, only those tools should be
     active; all others should be disabled at the proto level.
-    How: Enable only VIEW_FILE (no proto toggle) and assert run_command and
-    user_questions are disabled.
+    How: Enable only VIEW_FILE and assert all other tools are disabled.
     """
     strategy = self._make_strategy(
         capabilities_config=types.CapabilitiesConfig(
@@ -942,27 +947,14 @@ class LocalConnectionStrategyConfigTest(unittest.TestCase):
         )
     )
     config = strategy._build_harness_config()
+    self.assertTrue(config.harness_side_tools.view_file.enabled)
     self.assertFalse(config.harness_side_tools.run_command.enabled)
     self.assertFalse(config.harness_side_tools.user_questions.enabled)
     self.assertFalse(config.harness_side_tools.find.enabled)
-
-  def test_capabilities_config_unsupported_tool_warns(self):
-    """Verifies that disabling an unsupported tool logs a warning.
-
-    Why: Tools without proto toggles should produce a visible warning so
-    users know the setting has no harness-level effect yet.
-    How: Disable VIEW_FILE (unsupported) and assert the warning is logged.
-    """
-    strategy = self._make_strategy(
-        capabilities_config=types.CapabilitiesConfig(
-            disabled_tools=[types.BuiltinTools.VIEW_FILE],
-        )
-    )
-    with self.assertLogs(level="WARNING") as log:
-      strategy._build_harness_config()
-    self.assertTrue(
-        any("LocalConnection-level toggles" in msg for msg in log.output)
-    )
+    self.assertFalse(config.harness_side_tools.file_edit.enabled)
+    self.assertFalse(config.harness_side_tools.write_to_file.enabled)
+    self.assertFalse(config.harness_side_tools.grep_search.enabled)
+    self.assertFalse(config.harness_side_tools.list_dir.enabled)
 
   def test_capabilities_config_compaction_threshold(self):
     """Verifies compaction_threshold maps to HarnessConfig.compaction_threshold.
