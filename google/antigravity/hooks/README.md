@@ -96,7 +96,7 @@ from google.antigravity.hooks import policy
 
 policies = [
     policy.deny("*"),                       # Block everything by default
-    policy.allow("read_file"),              # Except reading files
+    policy.allow("view_file"),              # Except reading files
     policy.deny("run_command",              # Block dangerous commands
         when=lambda args: "rm" in args.get("CommandLine", "")),
     policy.ask_user("run_command",          # Ask for safe commands

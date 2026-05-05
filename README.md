@@ -23,23 +23,38 @@ The `system_instructions` parameter is optional.
 
 ```python
 import asyncio
-from google.antigravity import Agent
+from google.antigravity import Agent, AgentConfig
 
 async def main():
-    async with Agent(system_instructions="You are an expert assistant for codebase navigation.", api_key="GEMINI_API_KEY") as agent:
+    config = AgentConfig(
+        system_instructions="You are an expert assistant for codebase navigation.",
+        api_key="GEMINI_API_KEY",
+    )
+    async with Agent(config) as agent:
         response = await agent.chat("What files are in the current directory?")
         print(response)
 
-asyncio.run(main())
+async def run():
+    await main()
+
+if __name__ == "__main__":
+    asyncio.run(run())
 ```
 
 By default, `Agent` runs in **read-only mode** for safety. Pass
-`read_only=False` to enable write operations.
+`capabilities=CapabilitiesConfig()` to enable all tools (including writes).
 
 ### Interactive Loop
 
 ```python
-async with Agent(system_instructions="You are a helpful assistant.", api_key="GEMINI_API_KEY", read_only=False) as agent:
+from google.antigravity import Agent, AgentConfig, CapabilitiesConfig
+
+config = AgentConfig(
+    system_instructions="You are a helpful assistant.",
+    api_key="GEMINI_API_KEY",
+    capabilities=CapabilitiesConfig(),
+)
+async with Agent(config) as agent:
     await agent.run_interactive_loop()
 ```
 
@@ -91,9 +106,10 @@ asyncio.run(main())
 Pass rich multimedia file attachments (images, videos, audio, and documents) to the agent alongside textual instruction prompt lists:
 
 ```python
-from google.antigravity import Agent, Part
+from google.antigravity import Agent, AgentConfig, Part
 
-async with Agent(system_instructions="You are an expert software architect.") as agent:
+config = AgentConfig(system_instructions="You are an expert software architect.")
+async with Agent(config) as agent:
     # Load local multimedia assets seamlessly via Part.from_file
     image_part = Part.from_file("diagram.png", description="System design chart")
     
@@ -112,7 +128,11 @@ def get_weather(city: str) -> str:
     """Returns the current weather for a city."""
     return f"It's sunny in {city}."
 
-async with Agent(system_instructions="You are a helpful assistant.", tools=[get_weather]) as agent:
+config = AgentConfig(
+    system_instructions="You are a helpful assistant.",
+    tools=[get_weather],
+)
+async with Agent(config) as agent:
     response = await agent.chat("What's the weather in Tokyo?")
 ```
 
@@ -122,12 +142,13 @@ Connect to external [MCP](https://modelcontextprotocol.io/) servers and expose
 their tools to the agent:
 
 ```python
-from google.antigravity import Agent
+from google.antigravity import Agent, AgentConfig
 
-async with Agent(
+config = AgentConfig(
     system_instructions="You are a helpful assistant.",
     mcp_servers=[{"type": "stdio", "command": "npx", "args": ["my-mcp-server"]}],
-) as agent:
+)
+async with Agent(config) as agent:
     response = await agent.chat("Use the MCP tools to help me.")
 ```
 
@@ -136,7 +157,7 @@ async with Agent(
 Control agent behavior with a declarative policy system:
 
 ```python
-from google.antigravity import Agent
+from google.antigravity import Agent, AgentConfig, CapabilitiesConfig
 from google.antigravity.hooks.policy import deny, allow, ask_user, enforce
 
 policies = [
@@ -145,7 +166,12 @@ policies = [
     ask_user("run_command", handler=my_handler),  # Ask before running commands
 ]
 
-async with Agent(system_instructions="You are a helpful assistant.", policies=policies) as agent:
+config = AgentConfig(
+    system_instructions="You are a helpful assistant.",
+    capabilities=CapabilitiesConfig(),
+    policies=policies,
+)
+async with Agent(config) as agent:
     await agent.run_interactive_loop()
 ```
 
@@ -155,13 +181,17 @@ Run background tasks that react to external events and push messages into the
 agent:
 
 ```python
-from google.antigravity import Agent
+from google.antigravity import Agent, AgentConfig
 from google.antigravity.triggers import every
 
 async def check_status(ctx):
-    ctx.send("Check the deployment status.")
+    await ctx.send("Check the deployment status.")
 
-async with Agent(system_instructions="You are a helpful assistant.", triggers=[every(60, check_status)]) as agent:
+config = AgentConfig(
+    system_instructions="You are a helpful assistant.",
+    triggers=[every(60, check_status)],
+)
+async with Agent(config) as agent:
     await agent.run_interactive_loop()
 ```
 

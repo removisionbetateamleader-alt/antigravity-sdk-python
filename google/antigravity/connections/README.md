@@ -50,7 +50,8 @@ strategy = LocalConnectionStrategy(
     skills_paths=["/path/to/skills"],
 )
 
-async with strategy as connection:
+async with strategy:
+    connection = strategy.connect()
     await connection.send("Hello")
     async for step in connection.receive_steps():
         print(step)

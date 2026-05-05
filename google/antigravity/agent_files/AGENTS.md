@@ -21,23 +21,28 @@ will automatically use the `GEMINI_API_KEY` environment variable if available.
 The `system_instructions` parameter is optional.
 
 > [!NOTE]
-> The `read_only` flag only restricts **builtin** tools. If you provide **custom** tools that perform write operations, they will not be automatically blocked by `read_only=True`. Ensure your custom tools are safe or use policies to guard them.
+> The `capabilities` config default to **read-only** built-in tools.
+> If you provide **custom** tools that perform write operations, they will
+> not be automatically blocked. Ensure your custom tools are safe or use
+> policies to guard them.
 
 ```python
 import asyncio
-from google.antigravity import Agent
+from google.antigravity import Agent, AgentConfig, CapabilitiesConfig
 
 async def main():
-    async with Agent(
+    config = AgentConfig(
         system_instructions="You are an expert AI coding assistant helping a developer use the Antigravity Python SDK. Guide them on best practices and provide clear examples.",
-    ) as agent:
+    )
+    async with Agent(config) as agent:
         response = await agent.chat("What files are in the current directory?")
         print(response)
 
 asyncio.run(main())
 ```
 
-To enable write operations, pass `read_only=False`.
+To enable all tools (including writes), pass `capabilities=CapabilitiesConfig()`
+to the `AgentConfig`.
 
 ### 2. Custom Tools
 
@@ -49,7 +54,8 @@ def get_weather(city: str) -> str:
     return f"It's sunny in {city}."
 
 # Usage in Agent
-async with Agent(tools=[get_weather]) as agent:
+config = AgentConfig(tools=[get_weather])
+async with Agent(config) as agent:
     response = await agent.chat("What's the weather in Tokyo?")
 ```
 
@@ -58,6 +64,7 @@ async with Agent(tools=[get_weather]) as agent:
 Control agent behavior with policies:
 
 ```python
+from google.antigravity import Agent, AgentConfig, CapabilitiesConfig
 from google.antigravity.hooks.policy import deny, allow, ask_user
 
 policies = [
@@ -66,7 +73,11 @@ policies = [
     ask_user("run_command"),            # Ask before running commands
 ]
 
-async with Agent(policies=policies, read_only=False) as agent:
+config = AgentConfig(
+    capabilities=CapabilitiesConfig(),
+    policies=policies,
+)
+async with Agent(config) as agent:
     ...
 ```
 
