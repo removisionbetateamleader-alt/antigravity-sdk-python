@@ -173,6 +173,8 @@ echo ""
 echo "--- Uploading to OSS Exit Gate (${REPO_URL}) ---"
 twine upload \
   --repository-url "${REPO_URL}" \
+  --skip-existing \
+  --verbose \
   "${DIST_DIR}"/*
 
 echo "--- Release v${VERSION} complete ---"
