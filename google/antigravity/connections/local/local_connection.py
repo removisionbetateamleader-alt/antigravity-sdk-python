@@ -299,7 +299,7 @@ class LocalConnection(connection.Connection):
 
   def __init__(
       self,
-      process: subprocess.Popen[bytes],
+      process: subprocess.Popen[bytes] | None,
       ws: Any,
       tool_runner: t_runner.ToolRunner | None = None,
       hook_runner: h_runner.HookRunner | None = None,
@@ -536,19 +536,20 @@ class LocalConnection(connection.Connection):
 
       # Close stdin to signal the Go main loop to exit.  On EOF the
       # harness runs cleanupAllAgents and calls os.Exit(0).
-      if self._process.stdin:
+      if self._process and self._process.stdin:
         self._process.stdin.close()
 
       # Wait for the process to exit, escalating if needed.
-      try:
-        self._process.wait(timeout=5)
-      except subprocess.TimeoutExpired:
-        self._process.terminate()
+      if self._process:
         try:
-          self._process.wait(timeout=1)
+          self._process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-          self._process.kill()
-          self._process.wait(timeout=1)
+          self._process.terminate()
+          try:
+            self._process.wait(timeout=1)
+          except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=1)
     finally:
       if hook_error is not None:
         raise hook_error
