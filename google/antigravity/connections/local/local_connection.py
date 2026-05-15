@@ -25,10 +25,11 @@ import shutil
 import struct
 import subprocess
 import threading
-from typing import Any, AsyncIterator, Callable, NamedTuple, cast
+from typing import Any, AsyncIterator, Callable, NamedTuple, Sequence, cast
 
 from google.genai import types as genai_types
 from google.protobuf import json_format
+import pydantic
 import websockets
 
 from google.antigravity import types
@@ -41,6 +42,8 @@ from google.antigravity.tools import tool_runner as t_runner
 
 
 resources = None
+
+_ANY_ADAPTER = pydantic.TypeAdapter(Any)
 
 
 @dataclasses.dataclass
@@ -890,64 +893,88 @@ class LocalConnection(connection.Connection):
       self, step_update: localharness_pb2.StepUpdate
   ) -> None:
     """Handles question requests from the harness."""
-    questions_list = []
-    indices_to_hook = []
-    for i, uq in enumerate(step_update.questions_request.questions):
-      if uq.HasField("multiple_choice"):
-        mc = uq.multiple_choice
-        opts = [
-            types.AskQuestionOption(id=str(j + 1), text=choice)
-            for j, choice in enumerate(mc.choices)
-        ]
-        questions_list.append(
-            types.AskQuestionEntry(question=mc.question, options=opts)
+    try:
+      questions_list = []
+      indices_to_hook = []
+      for i, uq in enumerate(step_update.questions_request.questions):
+        if uq.HasField("multiple_choice"):
+          mc = uq.multiple_choice
+          opts = [
+              types.AskQuestionOption(id=str(j + 1), text=choice)
+              for j, choice in enumerate(mc.choices)
+          ]
+          questions_list.append(
+              types.AskQuestionEntry(question=mc.question, options=opts)
+          )
+          indices_to_hook.append(i)
+
+      answers = [
+          localharness_pb2.UserQuestionAnswer(unanswered=True)
+          for _ in step_update.questions_request.questions
+      ]
+
+      if self._hook_runner and questions_list:
+        ctx = self._current_turn_context or hooks.TurnContext(
+            self._hook_runner.session_context
         )
-        indices_to_hook.append(i)
+        _, question_res, _ = await self._hook_runner.dispatch_interaction(
+            turn_context=ctx,
+            interaction_spec=types.AskQuestionInteractionSpec(
+                questions=questions_list
+            ),
+        )
+        if question_res:
+          for orig_idx, r in zip(indices_to_hook, question_res.responses):
+            ans = localharness_pb2.UserQuestionAnswer()
+            if r.skipped:
+              ans.unanswered = True
+            else:
+              mc_ans = localharness_pb2.MultipleChoiceAnswer()
+              if r.selected_option_ids:
+                indices = []
+                for opt_id in r.selected_option_ids:
+                  try:
+                    indices.append(int(opt_id) - 1)
+                  except ValueError:
+                    pass
+                mc_ans.selected_choice_indices[:] = indices
+              if r.freeform_response:
+                mc_ans.freeform_response = r.freeform_response
+              ans.multiple_choice_answer.CopyFrom(mc_ans)
+            answers[orig_idx] = ans
+      elif not questions_list and step_update.questions_request.questions:
+        logging.warning(
+            "Received question_request with questions but none were"
+            " multiple_choice. Skipping all."
+        )
+      elif not self._hook_runner:
+        logging.warning(
+            "Received question_request but no HookRunner is configured."
+            " Skipping."
+        )
 
-    answers = [
-        localharness_pb2.UserQuestionAnswer(unanswered=True)
-        for _ in step_update.questions_request.questions
-    ]
-
-    if self._hook_runner and questions_list:
-      ctx = self._current_turn_context or hooks.TurnContext(
-          self._hook_runner.session_context
-      )
-      _, question_res, _ = await self._hook_runner.dispatch_interaction(
-          turn_context=ctx,
-          interaction_spec=types.AskQuestionInteractionSpec(
-              questions=questions_list
+      await self._send_question_response(step_update, answers)
+    except Exception as e:  # pylint: disable=broad-except
+      # The protocol requires a response to avoid deadlocking the harness.
+      # Send a single freeform answer with the error so the model sees it.
+      logging.exception("_handle_question_request failed; sending error")
+      error_answer = localharness_pb2.UserQuestionAnswer(
+          multiple_choice_answer=localharness_pb2.MultipleChoiceAnswer(
+              freeform_response=(
+                  f"SDK error processing question: {e!r}"
+              ),
           ),
       )
-      if question_res:
-        for orig_idx, r in zip(indices_to_hook, question_res.responses):
-          ans = localharness_pb2.UserQuestionAnswer()
-          if r.skipped:
-            ans.unanswered = True
-          else:
-            mc_ans = localharness_pb2.MultipleChoiceAnswer()
-            if r.selected_option_ids:
-              indices = []
-              for opt_id in r.selected_option_ids:
-                try:
-                  indices.append(int(opt_id) - 1)
-                except ValueError:
-                  pass
-              mc_ans.selected_choice_indices[:] = indices
-            if r.freeform_response:
-              mc_ans.freeform_response = r.freeform_response
-            ans.multiple_choice_answer.CopyFrom(mc_ans)
-          answers[orig_idx] = ans
-    elif not questions_list and step_update.questions_request.questions:
-      logging.warning(
-          "Received question_request with questions but none were"
-          " multiple_choice. Skipping all."
-      )
-    elif not self._hook_runner:
-      logging.warning(
-          "Received question_request but no HookRunner is configured. Skipping."
+      await self._send_question_response(
+          step_update, [error_answer],
       )
 
+  async def _send_question_response(
+      self,
+      step_update: localharness_pb2.StepUpdate,
+      answers: Sequence[localharness_pb2.UserQuestionAnswer],
+  ) -> None:
+    """Formats and sends a UserQuestionsResponse over the WebSocket."""
     resp = localharness_pb2.UserQuestionsResponse(
         trajectory_id=step_update.trajectory_id,
         step_index=step_update.step_index,
@@ -962,68 +989,84 @@ class LocalConnection(connection.Connection):
       self, step_update: localharness_pb2.StepUpdate
   ) -> None:
     """Handles tool confirmation requests from the harness."""
-    action_str = "unknown"
-    args = {}
-    found_action = False
+    try:
+      action_str = "unknown"
+      args = {}
+      found_action = False
 
-    for tool_enum, proto_field in _BUILTIN_TOOL_PROTO_FIELDS.items():
-      if step_update.HasField(proto_field):
-        action_str = tool_enum.value
-        found_action = True
-        sub_msg = getattr(step_update, proto_field)
-        args = json_format.MessageToDict(
-            sub_msg, preserving_proto_field_name=True
-        )
-        break
+      for tool_enum, proto_field in _BUILTIN_TOOL_PROTO_FIELDS.items():
+        if step_update.HasField(proto_field):
+          action_str = tool_enum.value
+          found_action = True
+          sub_msg = getattr(step_update, proto_field)
+          args = json_format.MessageToDict(
+              sub_msg, preserving_proto_field_name=True
+          )
+          break
 
-    if not found_action:
-      action_str = DEFAULT_HOST_TOOL_NAME
+      if not found_action:
+        action_str = DEFAULT_HOST_TOOL_NAME
 
-    if step_update.request_text:
-      args["request_text"] = step_update.request_text
+      if step_update.request_text:
+        args["request_text"] = step_update.request_text
 
-    tc = types.ToolCall(
-        id=_make_step_id(step_update.trajectory_id, step_update.step_index),
-        name=action_str,
-        args=args,
-    )
-    allow = True
-    op_ctx = None
-    # Auto-approve pre-requests for host tools because the actual tool call will
-    # be sent next with its proper name and arguments, triggering its own
-    # confirmation.
-    if tc.name == DEFAULT_HOST_TOOL_NAME:
+      tc = types.ToolCall(
+          id=_make_step_id(step_update.trajectory_id, step_update.step_index),
+          name=action_str,
+          args=args,
+      )
       allow = True
-    elif self._hook_runner:
-      ctx = self._current_turn_context or hooks.TurnContext(
-          self._hook_runner.session_context
-      )
-      res, _, op_ctx = await self._hook_runner.dispatch_pre_tool_call(
-          turn_context=ctx, tool_call=tc
-      )
-      allow = res.allow
-
-    # Track approved built-in tool calls so we can dispatch PostToolCallHook
-    # when the step transitions to STATE_DONE.
-    if allow and tc.name != DEFAULT_HOST_TOOL_NAME and self._hook_runner:
-      if op_ctx is None:
+      op_ctx = None
+      # Auto-approve pre-requests for host tools because the actual tool call
+      # will be sent next with its proper name and arguments, triggering its
+      # own confirmation.
+      if tc.name == DEFAULT_HOST_TOOL_NAME:
+        allow = True
+      elif self._hook_runner:
         ctx = self._current_turn_context or hooks.TurnContext(
             self._hook_runner.session_context
         )
-        op_ctx = hooks.OperationContext(ctx)
-      pending_key = _PendingCallKey(
-          trajectory_id=step_update.trajectory_id,
-          step_index=step_update.step_index,
-      )
-      self._pending_builtin_tool_calls[pending_key] = _PendingCallValue(
-          tool_call=tc,
-          operation_context=op_ctx,
-      )
+        res, _, op_ctx = await self._hook_runner.dispatch_pre_tool_call(
+            turn_context=ctx, tool_call=tc
+        )
+        allow = res.allow
 
+      # Track approved built-in tool calls so we can dispatch PostToolCallHook
+      # when the step transitions to STATE_DONE.
+      if allow and tc.name != DEFAULT_HOST_TOOL_NAME and self._hook_runner:
+        if op_ctx is None:
+          ctx = self._current_turn_context or hooks.TurnContext(
+              self._hook_runner.session_context
+          )
+          op_ctx = hooks.OperationContext(ctx)
+        pending_key = _PendingCallKey(
+            trajectory_id=step_update.trajectory_id,
+            step_index=step_update.step_index,
+        )
+        self._pending_builtin_tool_calls[pending_key] = _PendingCallValue(
+            tool_call=tc,
+            operation_context=op_ctx,
+        )
+
+      await self._send_tool_confirmation(step_update, allow)
+    except Exception:  # pylint: disable=broad-except
+      # The protocol requires a response to avoid deadlocking the harness.
+      # ToolConfirmation only has a bool field (no error/reason field), so
+      # rejecting is the only option. The harness transitions the step to
+      # STATE_ERROR, which the model does see.
+      logging.exception(
+          "_handle_tool_confirmation_request failed; rejecting"
+      )
+      await self._send_tool_confirmation(step_update, False)
+
+  async def _send_tool_confirmation(
+      self, step_update: localharness_pb2.StepUpdate, accepted: bool
+  ) -> None:
+    """Helper to format and send a ToolConfirmation over the WebSocket."""
     resp = localharness_pb2.ToolConfirmation(
         trajectory_id=step_update.trajectory_id,
         step_index=step_update.step_index,
-        accepted=allow,
+        accepted=accepted,
     )
     input_event = localharness_pb2.InputEvent(tool_confirmation=resp)
     await self._ws.send(json_format.MessageToJson(input_event))
@@ -1032,91 +1075,101 @@ class LocalConnection(connection.Connection):
       self, tool_call: localharness_pb2.ToolCall
   ) -> None:
     """Handles tool execution and hook interception."""
-    args = json.loads(tool_call.arguments_json or "{}")
+    try:
+      args = json.loads(tool_call.arguments_json or "{}")
 
-    tc = types.ToolCall(id=tool_call.id, name=tool_call.name, args=args)
+      tc = types.ToolCall(id=tool_call.id, name=tool_call.name, args=args)
 
-    tool_call_step = LocalConnectionStep(
-        id=tool_call.id,
-        step_index=1,
-        type=types.StepType.TOOL_CALL,
-        source=types.StepSource.MODEL,
-        target=types.StepTarget.ENVIRONMENT,
-        status=types.StepStatus.ACTIVE,
-        tool_calls=[tc],
-    )
-    await self._step_queue.put(tool_call_step)
-    op_context = None
-
-    if self._hook_runner:
-      ctx = self._current_turn_context or hooks.TurnContext(
-          self._hook_runner.session_context
+      tool_call_step = LocalConnectionStep(
+          id=tool_call.id,
+          step_index=1,
+          type=types.StepType.TOOL_CALL,
+          source=types.StepSource.MODEL,
+          target=types.StepTarget.ENVIRONMENT,
+          status=types.StepStatus.ACTIVE,
+          tool_calls=[tc],
       )
-      res, tc, op_context = await self._hook_runner.dispatch_pre_tool_call(
-          turn_context=ctx, tool_call=tc
-      )
+      await self._step_queue.put(tool_call_step)
+      op_context = None
 
-      if not res.allow:
-        reason = res.message or "No reason provided"
-        err_msg = f"Tool execution denied by hook policy: {reason}"
-        await self.send_tool_results([
-            types.ToolResult(
-                id=tool_call.id,
-                name=tool_call.name,
-                error=err_msg,
-            ),
-        ])
-        return
-
-    if self._tool_runner:
-      tool_error: Exception | None = None
-      try:
-        results = await self._tool_runner.process_tool_calls(
-            [types.ToolCall(name=tc.name, args=tc.args)]
+      if self._hook_runner:
+        ctx = self._current_turn_context or hooks.TurnContext(
+            self._hook_runner.session_context
         )
-        result = results[0]
-        result.id = tool_call.id
-        # ToolRunner may catch exceptions internally and set result.error.
-        if result.error:
-          tool_error = result.exception or RuntimeError(result.error)
-      except Exception as e:  # pylint: disable=broad-except
-        tool_error = e
-        result = types.ToolResult(
-            id=tool_call.id,
-            name=tool_call.name,
-            error=str(e),
-            exception=e,
+        res, tc, op_context = await self._hook_runner.dispatch_pre_tool_call(
+            turn_context=ctx, tool_call=tc
         )
 
-      # Dispatch on-tool-error hook when the result carries an error.
-      if tool_error and self._hook_runner:
-        if not op_context:
-          op_context = hooks.OperationContext(self._get_turn_context())
-        recovery_res, recovery_val = (
-            await self._hook_runner.dispatch_on_tool_error(
-                op_context, tool_error
-            )
-        )
-        if recovery_res.allow and recovery_val is not None:
+        if not res.allow:
+          reason = res.message or "No reason provided"
+          err_msg = f"Tool execution denied by hook policy: {reason}"
+          await self.send_tool_results([
+              types.ToolResult(
+                  id=tool_call.id,
+                  name=tool_call.name,
+                  error=err_msg,
+              ),
+          ])
+          return
+
+      if self._tool_runner:
+        tool_error: Exception | None = None
+        try:
+          results = await self._tool_runner.process_tool_calls(
+              [types.ToolCall(name=tc.name, args=tc.args)]
+          )
+          result = results[0]
+          result.id = tool_call.id
+          # ToolRunner may catch exceptions internally and set result.error.
+          if result.error:
+            tool_error = result.exception or RuntimeError(result.error)
+        except Exception as e:  # pylint: disable=broad-except
+          tool_error = e
           result = types.ToolResult(
               id=tool_call.id,
               name=tool_call.name,
-              result=recovery_val,
+              error=str(e),
+              exception=e,
           )
 
-      # Dispatch post-tool-call hook on success.
-      elif not result.error and self._hook_runner:
-        if not op_context:
-          op_context = hooks.OperationContext(self._get_turn_context())
-        await self._hook_runner.dispatch_post_tool_call(op_context, result)
+        # Dispatch on-tool-error hook when the result carries an error.
+        if tool_error and self._hook_runner:
+          if not op_context:
+            op_context = hooks.OperationContext(self._get_turn_context())
+          recovery_res, recovery_val = (
+              await self._hook_runner.dispatch_on_tool_error(
+                  op_context, tool_error
+              )
+          )
+          if recovery_res.allow and recovery_val is not None:
+            result = types.ToolResult(
+                id=tool_call.id,
+                name=tool_call.name,
+                result=recovery_val,
+            )
 
-      await self.send_tool_results([result])
-    else:
-      logging.warning(
-          "Received tool call %s but no tool runner is configured. "
-          "Yielding to user.",
-          tool_call.name,
-      )
+        # Dispatch post-tool-call hook on success.
+        elif not result.error and self._hook_runner:
+          if not op_context:
+            op_context = hooks.OperationContext(self._get_turn_context())
+          await self._hook_runner.dispatch_post_tool_call(op_context, result)
+
+        await self.send_tool_results([result])
+      else:
+        logging.warning(
+            "Received tool call %s but no tool runner is configured. "
+            "Yielding to user.",
+            tool_call.name,
+        )
+    except Exception as e:  # pylint: disable=broad-except
+      logging.exception("_handle_tool_call failed; returning error to model")
+      await self.send_tool_results([
+          types.ToolResult(
+              id=tool_call.id,
+              name=tool_call.name,
+              error=f"Internal SDK error: {e!r}",
+          )
+      ])
 
   def _tool_result_to_dict(self, result: types.ToolResult) -> dict[str, Any]:
     if result.error is not None:
@@ -1124,13 +1177,21 @@ class LocalConnection(connection.Connection):
 
     output = result.result
     if hasattr(output, "model_dump"):
-      output = output.model_dump()
+      output = output.model_dump(mode="json")
     elif hasattr(output, "dict"):
       output = output.dict()
 
+    try:
+      output = _ANY_ADAPTER.dump_python(output, mode="json")
+    except Exception:  # pylint: disable=broad-except
+      logging.warning(
+          "Pydantic serialization failed for tool result, falling back to"
+          " string",
+          exc_info=True,
+      )
+      output = str(output)
+
     if not isinstance(output, dict):
-      if not isinstance(output, (str, int, float, bool, type(None))):
-        output = str(output)
       return {"result": output}
 
     return output

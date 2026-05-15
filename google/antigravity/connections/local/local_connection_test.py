@@ -15,6 +15,7 @@
 """Unit tests for LocalConnection."""
 
 import asyncio
+import datetime
 import io
 import json
 import struct
@@ -23,6 +24,7 @@ import unittest
 from unittest import mock
 
 from absl.testing import absltest
+import pydantic
 import websockets
 
 from google.antigravity import types
@@ -3605,6 +3607,221 @@ class LocalConnectionBuiltinToolHooksTest(unittest.IsolatedAsyncioTestCase):
     )
     await asyncio.sleep(0.1)
     self.assertFalse(hook_fired.is_set())
+
+
+class LocalConnectionExceptionSafetyTest(unittest.IsolatedAsyncioTestCase):
+  """Tests verifying that handler exceptions don't deadlock the harness.
+
+  Each background handler (_handle_question_request,
+  _handle_tool_confirmation_request, _handle_tool_call) must catch
+  exceptions and send an informative error response rather than dying
+  silently and leaving the Go harness blocked.
+  """
+
+  def setUp(self):
+    super().setUp()
+    self.mock_process = mock.MagicMock(spec=subprocess.Popen)
+    self.tool_runner = tool_runner.ToolRunner()
+
+  def _make_harness(self, hr=None):
+    return test_utils.TestLocalHarness(
+        test_case=self,
+        process=self.mock_process,
+        tool_runner=self.tool_runner,
+        hook_runner=hr,
+    )
+
+  async def test_question_handler_crash_sends_error(self):
+    """Verifies a crashing interaction hook sends the error message.
+
+    When the on_interaction hook raises, the handler must still respond
+    to the harness to prevent deadlock. The error is sent as a single
+    freeform_response answer so the model sees what happened.
+    """
+    hr = hook_runner.HookRunner()
+
+    @hooks_base.on_interaction
+    async def crashing_hook(data):
+      _ = data
+      raise RuntimeError("Intentional interaction hook crash")
+
+    hr.register_hook(crashing_hook)
+    harness = self._make_harness(hr)
+
+    event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            step_index=1,
+            trajectory_id="test_traj",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            questions_request=localharness_pb2.UserQuestionsRequest(
+                questions=[
+                    localharness_pb2.UserQuestion(
+                        multiple_choice=localharness_pb2.MultipleChoice(
+                            question="Do you agree?",
+                            choices=["Yes", "No"],
+                        )
+                    )
+                ]
+            ),
+        )
+    )
+
+    await harness.send_event(event)
+
+    sent_data = await harness.wait_for_response()
+    self.assertIn("questionResponse", sent_data)
+    resp = sent_data["questionResponse"]["response"]
+    answers = resp["answers"]
+    # Single answer with the error in freeform_response.
+    self.assertEqual(len(answers), 1)
+    freeform = answers[0]["multipleChoiceAnswer"]["freeformResponse"]
+    self.assertIn("SDK error", freeform)
+    self.assertIn("Intentional interaction hook crash", freeform)
+
+  async def test_tool_confirmation_crash_sends_rejection(self):
+    """Verifies a crashing pre-tool hook sends accepted=False.
+
+    When the pre_tool_call_decide hook raises, the handler must reject
+    the tool confirmation to prevent the tool from executing in a broken
+    state. The harness transitions the step to STATE_ERROR.
+    """
+    hr = hook_runner.HookRunner()
+
+    @hooks_base.pre_tool_call_decide
+    async def crashing_hook(data):
+      _ = data
+      raise RuntimeError("Intentional pre-tool hook crash")
+
+    hr.register_hook(crashing_hook)
+    harness = self._make_harness(hr)
+
+    event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            step_index=1,
+            trajectory_id="test_traj",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            tool_confirmation_request=localharness_pb2.ToolConfirmationRequest(),
+            view_file=localharness_pb2.ActionViewFile(file_path="/foo/bar"),
+        )
+    )
+
+    await harness.send_event(event)
+
+    sent_data = await harness.wait_for_response()
+    self.assertIn("toolConfirmation", sent_data)
+    self.assertEqual(sent_data["toolConfirmation"]["trajectoryId"], "test_traj")
+    self.assertFalse(sent_data["toolConfirmation"]["accepted"])
+
+  async def test_tool_call_crash_sends_error_result(self):
+    """Verifies a crashing pre-tool hook sends error in ToolResponse.
+
+    When the pre_tool_call_decide hook raises during a host tool call,
+    the handler must send a ToolResponse with the error so the model
+    sees what went wrong and can adapt.
+    """
+    hr = hook_runner.HookRunner()
+
+    @hooks_base.pre_tool_call_decide
+    async def crashing_hook(data):
+      _ = data
+      raise RuntimeError("Intentional tool execution hook crash")
+
+    hr.register_hook(crashing_hook)
+    harness = self._make_harness(hr)
+
+    event = localharness_pb2.OutputEvent(
+        tool_call=localharness_pb2.ToolCall(
+            id="call_123",
+            name="some_tool",
+            arguments_json="{}",
+        )
+    )
+
+    await harness.send_event(event)
+
+    sent_data = await harness.wait_for_response()
+    self.assertIn("toolResponse", sent_data)
+    resp = sent_data["toolResponse"]
+    self.assertEqual(resp["id"], "call_123")
+    self.assertIn("Intentional tool execution hook crash", resp["responseJson"])
+
+
+class LocalConnectionSerializationTest(unittest.IsolatedAsyncioTestCase):
+  """Tests verifying Pydantic-based normalization in _tool_result_to_dict.
+
+  The SDK uses pydantic.TypeAdapter(Any) to normalize tool outputs
+  into JSON-safe primitives before json.dumps(). This prevents
+  serialization errors (the root cause of the deadlock bug) when tools
+  return complex Python types like sets, datetimes, or bytes.
+  """
+
+  def setUp(self):
+    super().setUp()
+    self.mock_process = mock.MagicMock(spec=subprocess.Popen)
+    self.tool_runner = tool_runner.ToolRunner()
+
+  def _make_harness(self):
+    return test_utils.TestLocalHarness(
+        test_case=self,
+        process=self.mock_process,
+        tool_runner=self.tool_runner,
+    )
+
+  async def test_normalizes_set_to_list(self):
+    """Verifies _tool_result_to_dict normalizes sets into JSON lists.
+
+    This is the exact type that triggered the original deadlock: a tool
+    returning a set caused json.dumps to raise TypeError, killing the
+    background task and leaving the harness waiting forever.
+    """
+    conn = self._make_harness().conn
+    tr = types.ToolResult(id="1", name="t", result={"tags": {"python", "sdk"}})
+    res_dict = conn._tool_result_to_dict(tr)
+    self.assertIsInstance(res_dict["tags"], list)
+    self.assertCountEqual(res_dict["tags"], ["python", "sdk"])
+
+  async def test_normalizes_datetime_to_iso_string(self):
+    """Verifies _tool_result_to_dict normalizes datetimes into ISO strings."""
+    conn = self._make_harness().conn
+    dt = datetime.datetime(2026, 5, 15, 2, 30, 0)
+    tr = types.ToolResult(id="1", name="t", result={"time": dt})
+    self.assertEqual(
+        conn._tool_result_to_dict(tr)["time"], "2026-05-15T02:30:00"
+    )
+
+  async def test_normalizes_bytes_to_string(self):
+    """Verifies _tool_result_to_dict normalizes bytes into UTF-8 strings."""
+    conn = self._make_harness().conn
+    tr = types.ToolResult(id="1", name="t", result={"data": b"hello"})
+    self.assertEqual(conn._tool_result_to_dict(tr)["data"], "hello")
+
+  async def test_preserves_pydantic_custom_serializer(self):
+    """Verifies _tool_result_to_dict respects custom @field_serializer.
+
+    When a tool returns a Pydantic model with a custom serializer (e.g.
+    to mask secrets), model_dump(mode="json") must be used instead of
+    model_dump() to ensure the serializer runs.
+    """
+    conn = self._make_harness().conn
+
+    class CustomModel(pydantic.BaseModel):
+      secret: str
+
+      @pydantic.field_serializer("secret")
+      def mask_secret(
+          self, secret: str, info: pydantic.FieldSerializationInfo
+      ) -> str:
+        del secret, info
+        return "xxxx"
+
+    tr = types.ToolResult(
+        id="call_1",
+        name="test_tool",
+        result=CustomModel(secret="my_super_secret_key"),
+    )
+
+    res_dict = conn._tool_result_to_dict(tr)
+    self.assertEqual(res_dict["secret"], "xxxx")
 
 
 if __name__ == "__main__":
