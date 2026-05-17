@@ -26,6 +26,7 @@ import struct
 import subprocess
 import threading
 from typing import Any, AsyncIterator, Callable, NamedTuple, Sequence, cast
+import urllib.parse
 
 from google.genai import types as genai_types
 from google.protobuf import json_format
@@ -206,6 +207,16 @@ def _make_step_id(trajectory_id: str, step_index: int) -> str:
   return f"{trajectory_id}:{step_index}" if trajectory_id else str(step_index)
 
 
+def normalize_wire_path(path: str) -> str:
+  """Translates Go harness transport representations to clean absolute filesystem paths."""
+  parsed = urllib.parse.urlparse(path)
+  if parsed.scheme == "file":
+    # urlparse("file:///abs/path").path == "/abs/path"
+    # unquote decodes percent-encoded chars (e.g., %20 -> space)
+    return urllib.parse.unquote(parsed.path)
+  return path
+
+
 class LocalConnectionStep(types.Step):
   """Connection-specific step for LocalConnection."""
 
@@ -243,11 +254,22 @@ class LocalConnectionStep(types.Step):
     active_tool_args = sub_msg if isinstance(sub_msg, dict) else {}
 
     if active_tool_name:
+      canonical_path = None
+      # Sanitize all known file path argument fields in-place
+      for path_key in ("path", "file_path", "TargetFile", "directory_path"):
+        if path_key in active_tool_args and isinstance(
+            active_tool_args[path_key], str
+        ):
+          normalized = normalize_wire_path(active_tool_args[path_key])
+          active_tool_args[path_key] = normalized
+          canonical_path = normalized
+
       tool_calls.append(
           types.ToolCall(
               name=active_tool_name,
               args=active_tool_args,
               id=_make_step_id(traj_id, step_idx),
+              canonical_path=canonical_path,
           )
       )
 
@@ -1010,10 +1032,19 @@ class LocalConnection(connection.Connection):
       if step_update.request_text:
         args["request_text"] = step_update.request_text
 
+      canonical_path = None
+      # Sanitize all known file path argument fields in-place
+      for path_key in ("path", "file_path", "TargetFile", "directory_path"):
+        if path_key in args and isinstance(args[path_key], str):
+          normalized = normalize_wire_path(args[path_key])
+          args[path_key] = normalized
+          canonical_path = normalized
+
       tc = types.ToolCall(
           id=_make_step_id(step_update.trajectory_id, step_update.step_index),
           name=action_str,
           args=args,
+          canonical_path=canonical_path,
       )
       allow = True
       op_ctx = None
@@ -1317,7 +1348,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     )
     self._conversation_id = conversation_id
     self._save_dir = save_dir
-    self._workspaces = workspaces or []
+    self._workspaces = [normalize_wire_path(ws) for ws in workspaces or []]
     self._app_data_dir = app_data_dir
 
   def _build_harness_config(self) -> localharness_pb2.HarnessConfig:

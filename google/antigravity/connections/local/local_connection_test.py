@@ -942,6 +942,52 @@ class LocalConnectionTest(unittest.IsolatedAsyncioTestCase):
     )
     await asyncio.wait_for(consumer_task, timeout=1.0)
 
+  async def test_connection_normalizes_file_uri_arguments(self):
+    """Verifies that file:// URIs in tool confirmations are normalized before hooks."""
+    hr = hook_runner.HookRunner()
+    captured_tc = None
+
+    @hooks_base.pre_tool_call_decide
+    async def capturing_hook(data):
+      nonlocal captured_tc
+      captured_tc = data
+      return hooks_base.HookResult(allow=True)
+
+    hr.register_hook(capturing_hook)
+
+    harness = test_utils.TestLocalHarness(
+        test_case=self,
+        process=self.mock_process,
+        tool_runner=self.tool_runner,
+        hook_runner=hr,
+    )
+
+    event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            step_index=1,
+            trajectory_id="test_traj",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            tool_confirmation_request=localharness_pb2.ToolConfirmationRequest(),
+            view_file=localharness_pb2.ActionViewFile(
+                file_path="file:///dev/shm/workspace/foo.py"
+            ),
+        )
+    )
+
+    await harness.send_event(event)
+    await harness.wait_for_response()
+
+    self.assertIsNotNone(captured_tc)
+    self.assertEqual(
+        captured_tc.args.get("file_path"),
+        "/dev/shm/workspace/foo.py",
+    )
+    self.assertNotIn("canonical_path", captured_tc.args)
+    self.assertEqual(
+        captured_tc.canonical_path,
+        "/dev/shm/workspace/foo.py",
+    )
+
 
 class LocalConnectionStepFromDictTest(unittest.TestCase):
   """Tests for LocalConnectionStep.from_dict derivation logic.
@@ -1041,6 +1087,7 @@ class LocalConnectionStepFromDictTest(unittest.TestCase):
     self.assertEqual(len(step.tool_calls), 1)
     self.assertEqual(step.tool_calls[0].name, "view_file")
     self.assertEqual(step.tool_calls[0].args, {"file_path": "/foo"})
+    self.assertEqual(step.tool_calls[0].canonical_path, "/foo")
 
   def test_structured_output_extracted_from_finish(self):
     """Verifies that structured output is extracted when finish payload is present.
@@ -1079,6 +1126,24 @@ class LocalConnectionStepFromDictTest(unittest.TestCase):
         },
     })
     self.assertIsNone(step.structured_output)
+
+  def test_step_from_dict_normalizes_file_uri_arguments(self):
+    """Verifies that LocalConnectionStep.from_dict normalizes file:// URIs."""
+    step = local_connection.LocalConnectionStep.from_dict({
+        "step_index": 1,
+        "trajectory_id": "traj_1",
+        "state": "STATE_WAITING_FOR_USER",
+        "view_file": {"file_path": "file:///dev/shm/workspace/foo.py"},
+    })
+    self.assertEqual(len(step.tool_calls), 1)
+    self.assertEqual(
+        step.tool_calls[0].args.get("file_path"), "/dev/shm/workspace/foo.py"
+    )
+    self.assertNotIn("canonical_path", step.tool_calls[0].args)
+    self.assertEqual(
+        step.tool_calls[0].canonical_path,
+        "/dev/shm/workspace/foo.py",
+    )
 
 
 class LocalConnectionToolCallNoRunnerTest(unittest.IsolatedAsyncioTestCase):
@@ -1671,6 +1736,15 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     strategy = self._make_strategy(capabilities_config=capabilities_config)
     config = strategy._build_harness_config()
     self.assertFalse(config.harness_side_tools.subagents.enabled)
+
+  def test_strategy_normalizes_configured_workspaces(self):
+    """Verifies that workspace configurations using file:// URIs are canonicalized."""
+    strategy = self._make_strategy(
+        workspaces=["file:///dev/shm/workspace", "/tmp/clean-path"]
+    )
+    self.assertEqual(
+        strategy._workspaces, ["/dev/shm/workspace", "/tmp/clean-path"]
+    )
 
 
 class LocalConnectionStrategyApiKeyTest(unittest.IsolatedAsyncioTestCase):

@@ -428,11 +428,14 @@ class ToolCall(pydantic.BaseModel):
     name: Tool identifier. Use a BuiltinTools member for Connection-provided
       tools, or an arbitrary string for custom host-side tools.
     args: Keyword arguments for the tool, as a JSON-serializable dict.
+    canonical_path: Optional normalized filesystem path for file-related tools.
+      Populated by the Connection layer to enable platform-agnostic L2 policies.
   """
 
   name: BuiltinTools | str
   args: dict[str, Any] = pydantic.Field(default_factory=dict)
   id: str | None = None
+  canonical_path: str | None = None
 
 
 class ToolResult(pydantic.BaseModel):

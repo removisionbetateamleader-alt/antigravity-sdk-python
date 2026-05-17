@@ -72,8 +72,8 @@ import enum
 import inspect
 import logging
 import os
+import typing
 from typing import Any
-import urllib.parse
 
 import pydantic
 
@@ -276,26 +276,12 @@ def confirm_run_command(
 def _normalize_path(path: str) -> str:
   """Canonicalizes a path for workspace boundary comparison.
 
-  Handles inputs from multiple sources that may use different representations:
-
-  - **file:// URIs**: The Go harness sends paths as ``file:///abs/path``.
-    These are parsed via ``urllib.parse.urlparse`` to extract the path
-    component, so ``file:///dev/shm/foo`` becomes ``/dev/shm/foo``.
-  - **Percent-encoded characters**: URI paths may encode special characters
-    (spaces as ``%20``, etc.). These are decoded via ``urllib.parse.unquote``.
-  - **Redundant separators, `.`, `..`**: Resolved by ``os.path.abspath``.
-
   Args:
-    path: A filesystem path or ``file://`` URI.
+    path: A filesystem path.
 
   Returns:
     An absolute, canonical filesystem path.
   """
-  parsed = urllib.parse.urlparse(path)
-  if parsed.scheme == "file":
-    # urlparse("file:///abs/path").path == "/abs/path"
-    # urlparse("file://host/share").path == "/share" (host ignored)
-    path = urllib.parse.unquote(parsed.path)
   return os.path.abspath(path)
 
 
@@ -316,15 +302,9 @@ def workspace_only(workspaces: Sequence[str]) -> list[Policy]:
 
   file_tools = [t.value for t in types.BuiltinTools.file_tools()]
 
-  def _outside_workspace(args: dict[str, Any]) -> bool:
+  def _outside_workspace(tc: types.ToolCall) -> bool:
     """Returns True when the target path is outside all workspaces."""
-    path = (
-        args.get("path")
-        or args.get("file_path")
-        or args.get("TargetFile")
-        or args.get("directory_path")
-        or ""
-    )
+    path = tc.canonical_path or ""
     if not path:
       # No path argument found — allow the call so we don't break
       # tool calls that happen to omit paths (e.g. list_directory
@@ -385,7 +365,9 @@ def _matches_tool(policy: Policy, tool_name: str) -> bool:
   return policy.tool == _WILDCARD or policy.tool == tool_name
 
 
-async def _evaluate_predicate(policy: Policy, args: Mapping[str, Any]) -> bool:
+async def _evaluate_predicate(
+    policy: Policy, tool_call: types.ToolCall
+) -> bool:
   """Evaluates a policy's predicate.
 
   If the predicate is None, the policy always matches.
@@ -393,7 +375,7 @@ async def _evaluate_predicate(policy: Policy, args: Mapping[str, Any]) -> bool:
 
   Args:
     policy: The policy being evaluated.
-    args: The arguments of the tool call.
+    tool_call: The ToolCall instance.
 
   Returns:
     True if the predicate matches, False otherwise.
@@ -404,18 +386,27 @@ async def _evaluate_predicate(policy: Policy, args: Mapping[str, Any]) -> bool:
   sig = inspect.signature(policy.when)
   params = list(sig.parameters.values())
 
-  first_param = params[0] if params else None
-  if (
-      first_param
-      and isinstance(first_param.annotation, type)
-      and issubclass(first_param.annotation, pydantic.BaseModel)
-  ):
-    typed_args = first_param.annotation.model_validate(args)
-    raw_result = policy.when(typed_args)
-  elif not params:
-    raw_result = policy.when()
+  if params:
+    first_param = params[0]
+    # Resolve string annotations if future annotations are active
+    try:
+      hints = typing.get_type_hints(policy.when)
+      annotation = hints.get(first_param.name, first_param.annotation)
+    except (TypeError, NameError):
+      annotation = first_param.annotation
+
+    if isinstance(annotation, type) and issubclass(
+        annotation, pydantic.BaseModel
+    ):
+      if issubclass(annotation, types.ToolCall):
+        raw_result = policy.when(tool_call)
+      else:
+        typed_args = annotation.model_validate(tool_call.args)
+        raw_result = policy.when(typed_args)
+    else:
+      raw_result = policy.when(tool_call.args)
   else:
-    raw_result = policy.when(args)
+    raw_result = policy.when()
 
   result = await raw_result if inspect.isawaitable(raw_result) else raw_result
   return bool(result)
@@ -463,7 +454,7 @@ class _PolicyDecideHook(hooks.PreToolCallDecideHook):
       return None
 
     try:
-      if not await _evaluate_predicate(p, tool_call.args):
+      if not await _evaluate_predicate(p, tool_call):
         return None
 
       # First match in this bucket wins.

@@ -46,6 +46,20 @@ class ToolCallTest(unittest.TestCase):
     self.assertEqual(tc.name, "read_file")
     self.assertEqual(tc.args, {"path": "/tmp/foo"})
 
+  def test_canonical_path_default_none(self):
+    """Verifies that canonical_path defaults to None."""
+    tc = types.ToolCall(name="read_file", args={"path": "/tmp/foo"})
+    self.assertIsNone(tc.canonical_path)
+
+  def test_canonical_path_explicit(self):
+    """Verifies that canonical_path can be explicitly set."""
+    tc = types.ToolCall(
+        name="read_file",
+        args={"path": "/tmp/foo"},
+        canonical_path="/tmp/foo",
+    )
+    self.assertEqual(tc.canonical_path, "/tmp/foo")
+
   def test_default_args(self):
     """Verifies that args defaults to empty dict when omitted.
 
