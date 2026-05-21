@@ -453,6 +453,11 @@ typing_extensions==4.15.0 \
     --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
     # Added manually for Python < 3.11 build compatibility (dependency of cryptography)
 
+backports-tarfile==1.2.0 \
+    --hash=sha256:77e284d754527b01fb1e6fa8a1afe577858ebe4e9dad8919e34c862cb399bc34 \
+    --hash=sha256:d75e02c268746e1b8144c278978b6e98e85de6ad16f8e4b0844a154557eca991
+    # Added manually for Python < 3.11 build compatibility (dependency of jaraco-context)
+
 # The following packages are considered to be unsafe in a requirements file:
 setuptools==82.0.1 \
     --hash=sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9 \

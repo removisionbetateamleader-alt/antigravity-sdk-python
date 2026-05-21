@@ -8,3 +8,5 @@ twine
 wheel
 typing-extensions
 keyrings.google-artifactregistry-auth
+backports-tarfile
+
