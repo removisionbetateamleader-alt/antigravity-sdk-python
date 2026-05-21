@@ -211,7 +211,7 @@ from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.types import McpStdioServer
 
 config = LocalAgentConfig(
-    mcp_servers=[McpStdioServer(command="npx", args=["my-mcp-server"])],
+    mcp_servers=[McpStdioServer(name="my_server", command="npx", args=["my-mcp-server"])],
 )
 async with Agent(config) as agent:
     response = await agent.chat("Use the MCP tools to help me.")

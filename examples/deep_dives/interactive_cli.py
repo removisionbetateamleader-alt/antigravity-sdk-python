@@ -123,6 +123,7 @@ async def run():
       os.path.dirname(__file__), "..", "resources", "mcp_server.py"
   )
   mcp_server = types.McpStdioServer(
+      name="pirate_math",
       command="python3",
       args=[mcp_server_path, "--transport=stdio"],
   )

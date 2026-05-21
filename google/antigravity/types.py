@@ -40,6 +40,7 @@ __all__ = [
     "SystemInstructions",
     "BuiltinTools",
     "CapabilitiesConfig",
+    "BaseMcpServerConfig",
     "McpStdioServer",
     "McpSseServer",
     "McpStreamableHttpServer",
@@ -364,11 +365,18 @@ class CapabilitiesConfig(pydantic.BaseModel):
     return self
 
 
-class McpStdioServer(pydantic.BaseModel):
+class BaseMcpServerConfig(pydantic.BaseModel):
+  """Base configuration for all Model Context Protocol (MCP) servers."""
+
+  name: str
+
+
+class McpStdioServer(BaseMcpServerConfig):
   """Configuration for an MCP server connected via stdio.
 
   Attributes:
     command: The command to run to start the server.
+    name: Unique identifier for this MCP server.
     type: The type of connection, always "stdio".
     args: Arguments to pass to the command.
   """
@@ -378,11 +386,12 @@ class McpStdioServer(pydantic.BaseModel):
   args: list[str] = pydantic.Field(default_factory=list)
 
 
-class McpSseServer(pydantic.BaseModel):
+class McpSseServer(BaseMcpServerConfig):
   """Configuration for an MCP server connected via SSE.
 
   Attributes:
     url: The URL of the SSE endpoint.
+    name: Unique identifier for this MCP server.
     type: The type of connection, always "sse".
     headers: Optional headers to send with the connection request.
   """
@@ -392,11 +401,12 @@ class McpSseServer(pydantic.BaseModel):
   headers: dict[str, str] | None = None
 
 
-class McpStreamableHttpServer(pydantic.BaseModel):
+class McpStreamableHttpServer(BaseMcpServerConfig):
   """Configuration for an MCP server connected via Streamable HTTP.
 
   Attributes:
     url: The URL of the HTTP endpoint.
+    name: Unique identifier for this MCP server.
     type: The type of connection, always "http".
     headers: Optional headers to send with the connection request.
     timeout: Connection timeout in seconds.

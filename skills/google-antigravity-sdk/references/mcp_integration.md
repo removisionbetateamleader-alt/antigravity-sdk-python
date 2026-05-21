@@ -36,6 +36,7 @@ from google.antigravity import Agent, LocalAgentConfig, types
 
 mcp_servers = [
     types.McpStdioServer(
+        name="my_stdio_server",
         command="python3",
         args=["mcp_server.py"],
     )
@@ -60,6 +61,7 @@ from google.antigravity import Agent, LocalAgentConfig, types
 
 mcp_servers = [
     types.McpSseServer(
+        name="my_sse_server",
         url="https://example.com/mcp/sse",
         headers={"Authorization": "Bearer your-token-here"},  # Optional headers
     )

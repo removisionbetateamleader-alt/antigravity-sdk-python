@@ -139,7 +139,7 @@ class TestMcpBridge(unittest.TestCase):
   def test_connect(self):
     """Verifies that connect correctly dispatches to specific methods."""
     bridge = McpBridge()
-    
+
     bridge.connect_stdio = mock.AsyncMock()
     bridge.connect_sse = mock.AsyncMock()
     bridge.connect_streamable_http = mock.AsyncMock()
@@ -148,6 +148,7 @@ class TestMcpBridge(unittest.TestCase):
       # Test stdio
       stdio_cfg = mock.MagicMock()
       stdio_cfg.type = "stdio"
+      stdio_cfg.name = "stdio_math"
       stdio_cfg.command = "cmd"
       stdio_cfg.args = ["arg"]
       await bridge.connect(stdio_cfg)
@@ -156,6 +157,7 @@ class TestMcpBridge(unittest.TestCase):
       # Test sse
       sse_cfg = mock.MagicMock()
       sse_cfg.type = "sse"
+      sse_cfg.name = "sse_math"
       sse_cfg.url = "url"
       sse_cfg.headers = {"h": "v"}
       await bridge.connect(sse_cfg)
@@ -164,6 +166,7 @@ class TestMcpBridge(unittest.TestCase):
       # Test http
       http_cfg = mock.MagicMock()
       http_cfg.type = "http"
+      http_cfg.name = "http_math"
       http_cfg.url = "url2"
       http_cfg.headers = None
       http_cfg.timeout = 10.0

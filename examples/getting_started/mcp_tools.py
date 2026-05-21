@@ -38,6 +38,7 @@ async def mcp_stdio() -> None:
       os.path.dirname(__file__), "..", "resources", "mcp_server.py"
   )
   stdio_server = types.McpStdioServer(
+      name="pirate_math",
       command="python3",
       args=[mcp_server_path, "--transport=stdio"],
   )
@@ -56,7 +57,12 @@ async def mcp_sse() -> None:
   print("\n  --- Showcasing SSE Transport ---")
   async with mcp_server.run("sse") as port:
     config = LocalAgentConfig(
-        mcp_servers=[types.McpSseServer(url=f"http://localhost:{port}/sse")]
+        mcp_servers=[
+            types.McpSseServer(
+                name="pirate_math",
+                url=f"http://localhost:{port}/sse",
+            )
+        ]
     )
 
     async with Agent(config) as my_agent:
@@ -72,7 +78,10 @@ async def mcp_http() -> None:
   async with mcp_server.run("streamable-http") as port:
     config = LocalAgentConfig(
         mcp_servers=[
-            types.McpStreamableHttpServer(url=f"http://localhost:{port}/mcp")
+            types.McpStreamableHttpServer(
+                name="pirate_math",
+                url=f"http://localhost:{port}/mcp",
+            )
         ]
     )
 

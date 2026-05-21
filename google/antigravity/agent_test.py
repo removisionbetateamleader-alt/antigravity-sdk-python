@@ -271,9 +271,12 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
     mock_strategy_class.return_value = mock.MagicMock(stop=mock.AsyncMock())
     config = local_connection.LocalAgentConfig(
         system_instructions="test",
-        mcp_servers=[
-            {"type": "stdio", "command": "node", "args": ["index.js"]}
-        ],
+        mcp_servers=[{
+            "type": "stdio",
+            "name": "test_server",
+            "command": "node",
+            "args": ["index.js"],
+        }],
         policies=[],
         workspaces=[],
     )
@@ -297,9 +300,12 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
     mock_strategy_class.return_value = mock.MagicMock(stop=mock.AsyncMock())
     config = local_connection.LocalAgentConfig(
         system_instructions="test",
-        mcp_servers=[
-            {"type": "stdio", "command": "node", "args": ["index.js"]}
-        ],
+        mcp_servers=[{
+            "type": "stdio",
+            "name": "test_server",
+            "command": "node",
+            "args": ["index.js"],
+        }],
         policies=[policy.deny("*")],
     )
     async with agent.Agent(config):
@@ -327,9 +333,12 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
 
     config = local_connection.LocalAgentConfig(
         system_instructions="test",
-        mcp_servers=[
-            {"type": "stdio", "command": "node", "args": ["index.js"]}
-        ],
+        mcp_servers=[{
+            "type": "stdio",
+            "name": "test_server",
+            "command": "node",
+            "args": ["index.js"],
+        }],
         hooks=[MyPreToolCallDecideHook()],
     )
     async with agent.Agent(config):
@@ -753,9 +762,13 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
     mock_bridge_instance.tools = [mock_tool]
 
     mcp_servers = [
-        types.McpStdioServer(command="python3", args=["server.py"]),
-        types.McpSseServer(url="http://localhost:8000/sse"),
-        types.McpStreamableHttpServer(url="http://localhost:8000/http"),
+        types.McpStdioServer(
+            name="stdio_server", command="python3", args=["server.py"]
+        ),
+        types.McpSseServer(name="sse_server", url="http://localhost:8000/sse"),
+        types.McpStreamableHttpServer(
+            name="http_server", url="http://localhost:8000/http"
+        ),
     ]
 
     config = local_connection.LocalAgentConfig(
