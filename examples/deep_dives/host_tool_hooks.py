@@ -62,6 +62,7 @@ from absl import app
 from absl import logging
 
 from google.antigravity import types
+
 from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import hooks
 
@@ -234,8 +235,8 @@ async def run():
       capabilities=types.CapabilitiesConfig(
           enable_subagents=True,
       ),
+      gemini_config=types.GeminiConfig(),
   )
-  config.gemini_config = types.GeminiConfig()
 
   logging.info("Starting agent...")
   async with Agent(config) as agent:
