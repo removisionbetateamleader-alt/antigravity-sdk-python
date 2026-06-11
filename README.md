@@ -1,4 +1,4 @@
-i added more AI tools to the platform. i added a IDE a termux terminal and multimodels. this is now antigravity on steroids.(have fun and becareful).
+
 Google Antigravity SDK
 
 The Google Antigravity SDK is a Python SDK for building AI agents powered by
